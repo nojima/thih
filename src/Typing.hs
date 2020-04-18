@@ -234,7 +234,6 @@ match type1 type2 =
 
 -- 型クラス
 
-
 data Qualified t =
     [Predicate] :=> t    -- ps :=> t における ps を "context" と呼び、t を "head" と呼ぶ
     deriving (Show, Eq)
@@ -251,8 +250,8 @@ instance Types t => Types (Qualified t) where
         typeVariables predicates `Set.union` typeVariables type_
 
 instance Types Predicate where
-    apply subst (IsIn ident type_) =
-        IsIn ident (apply subst type_)
+    apply subst (IsIn className type_) =
+        IsIn className (apply subst type_)
 
     typeVariables (IsIn _ type_) =
         typeVariables type_
@@ -264,9 +263,14 @@ matchPred :: Predicate -> Predicate -> Result Subst
 matchPred = lift match
 
 lift :: (Type -> Type -> Result a) -> Predicate -> Predicate -> Result a
-lift f (IsIn ident1 type1) (IsIn ident2 type2)
-    | ident1 == ident2 = f type1 type2
-    | otherwise        = typeError "classes differ"
+lift f (IsIn className1 type1) (IsIn className2 type2)
+    | className1 == className2 =
+        f type1 type2
+    | otherwise =
+        typeError $ "classes differ: class1="
+                 <> className1
+                 <> ", class2="
+                 <> className2
 
 type Instance = Qualified Predicate
 
