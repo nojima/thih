@@ -2,6 +2,8 @@
 {-# LANGUAGE NamedFieldPuns #-}
 module Typing where
 
+import           Control.Monad ((>=>))
+import qualified Data.Maybe as Maybe
 import qualified Data.Map.Strict as Map
 import           Data.Map.Strict (Map)
 import qualified Data.Set as Set
@@ -23,6 +25,14 @@ type Result a = Either TypeError a
 typeError :: Text -> Result a
 typeError errorMessage =
     Left (TypeError errorMessage)
+
+isDefined :: Result a -> Bool
+isDefined (Right _) = True
+isDefined (Left  _) = False
+
+panic :: Text -> a
+panic errorMessage =
+    error (T.unpack errorMessage)
 
 -- カインド
 data Kind
@@ -99,11 +109,11 @@ instance HasKind Type where
             TApply t _ ->
                 case kind t of
                     KFun _ k -> k
-                    _ -> error $ "kind is not defined for TApply "
-                              ++ "where the kind of argument is not KFun: "
-                              ++ show type_
+                    _ -> panic $ "kind is not defined for TApply "
+                              <> "where the kind of argument is not KFun: "
+                              <> T.pack (show type_)
             TGeneric _ ->
-                error $ "kind is not defined for TGeneric: " ++ show type_
+                panic $ "kind is not defined for TGeneric: " <> T.pack (show type_)
 
 -- 型代入
 type Subst = Map Variable Type
@@ -223,7 +233,10 @@ match type1 type2 =
                 <> T.pack (show type2)
 
 -- 型クラス
-data Qualified t = [Predicate] :=> t
+
+
+data Qualified t =
+    [Predicate] :=> t    -- ps :=> t における ps を "context" と呼び、t を "head" と呼ぶ
     deriving (Show, Eq)
 
 data Predicate =
@@ -275,19 +288,19 @@ super classEnv ident =
         Just Class{_superClasses} ->
             _superClasses
         _ ->
-            error $ T.unpack $ "`" <> ident <> "` is not a class"
+            panic $ "`" <> ident <> "` is not a class"
 
 instances :: ClassEnv -> Id -> [Instance]
-instances classEnv ident =
-    case Map.lookup ident (_classes classEnv) of
+instances classEnv className =
+    case Map.lookup className (_classes classEnv) of
         Just Class{_instances} ->
             _instances
         _ ->
-            error $ T.unpack $ "`" <> ident <> "` is not a class"
+            panic $ "`" <> className <> "` is not a class"
 
 modify :: ClassEnv -> Id -> Class -> ClassEnv
-modify classEnv ident class_ =
-    classEnv{_classes = Map.insert ident class_ (_classes classEnv)}
+modify classEnv name class_ =
+    classEnv{_classes = Map.insert name class_ (_classes classEnv)}
 
 initialClassEnv :: ClassEnv
 initialClassEnv =
@@ -295,3 +308,70 @@ initialClassEnv =
         { _classes  = Map.empty
         , _defaults = [tInteger, tDouble]
         }
+
+type EnvTransformer = ClassEnv -> Result ClassEnv
+
+addClass :: Id -> [Id] -> EnvTransformer
+addClass className superClasses classEnv@ClassEnv{_classes}
+    | defined className =
+        typeError ("class `" <> className <> "` already defined")
+    | not (all defined superClasses) =
+        typeError "superclass not defined"
+    | otherwise =
+        let newClass = Class superClasses [] in
+        return (modify classEnv className newClass)
+  where
+    defined name =
+        Maybe.isJust (Map.lookup name _classes)
+
+addPreludeClasses :: EnvTransformer
+addPreludeClasses =
+    addCoreClasses >=> addNumClasses
+
+addCoreClasses :: EnvTransformer
+addCoreClasses =
+    addClass "Eq" []
+    >=> addClass "Ord" ["Eq"]
+    >=> addClass "Show" []
+    >=> addClass "Read" []
+    >=> addClass "Bounded" []
+    >=> addClass "Enum" []
+    >=> addClass "Functor" []
+    >=> addClass "Monad" []
+
+addNumClasses :: EnvTransformer
+addNumClasses =
+    addClass "Num" ["Eq", "Show"]
+    >=> addClass "Real" ["Num", "Ord"]
+    >=> addClass "Fractional" ["Num"]
+    >=> addClass "Integral" ["Real", "Enum"]
+    >=> addClass "RealFrac" ["Real", "Fractional"]
+    >=> addClass "Floating" ["Fractional"]
+    >=> addClass "RealFloat" ["RealFrac", "Floating"]
+
+addInstance :: [Predicate] -> Predicate -> EnvTransformer
+addInstance context head_@(IsIn className _) classEnv@ClassEnv{_classes}
+    | not (defined className) =
+        typeError ("class `" <> className <> "` is not defined")
+    | any (overlap head_) heads =
+        typeError "overlapping instance"
+    | otherwise =
+        return (modify classEnv className newClass)
+  where
+    defined name =
+        Maybe.isJust (Map.lookup name _classes)
+
+    insts =
+        instances classEnv className
+
+    heads =
+        map (\(_ :=> q) -> q) insts
+
+    newClass =
+        Class (super classEnv className) ((context :=> head_) : insts)
+
+-- two instances for a class are said to overlap if there is some predicate that
+-- is a substition instance of the heads of both instance declarations
+overlap :: Predicate -> Predicate -> Bool
+overlap pred1 pred2 =
+    isDefined (mguPred pred1 pred2)
