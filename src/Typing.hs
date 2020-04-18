@@ -2,7 +2,6 @@
 {-# LANGUAGE NamedFieldPuns #-}
 module Typing where
 
-import           Control.Monad (msum)
 import qualified Data.Map.Strict as Map
 import           Data.Map.Strict (Map)
 import qualified Data.Set as Set
@@ -14,6 +13,16 @@ type Id = Text
 
 enumId :: Int -> Id
 enumId n = "v" <> T.pack (show n)
+
+-- エラー
+newtype TypeError = TypeError Text
+    deriving (Show, Eq)
+
+type Result a = Either TypeError a
+
+typeError :: Text -> Result a
+typeError errorMessage =
+    Left (TypeError errorMessage)
 
 -- カインド
 data Kind
@@ -144,13 +153,16 @@ infixr 4 @@
 s1 @@ s2 =
     Map.map (apply s1) s2 `Map.union` s1
 
-merge :: MonadFail m => Subst -> Subst -> m Subst
+merge :: Subst -> Subst -> Result Subst
 merge s1 s2 =
     if all mapsToSameType intersection then
         return (Map.union s1 s2)
     else
-        fail $ "cannot merge s1 and s2: s1="
-            ++ show s1 ++ ", s2=" ++ show s2
+        typeError
+            $ "cannot merge s1 and s2: s1="
+            <> T.pack (show s1)
+            <> ", s2="
+            <> T.pack (show s2)
   where
     intersection =
         Map.keys (Map.intersection s1 s2)
@@ -158,7 +170,7 @@ merge s1 s2 =
         apply s1 (TVariable v) == apply s2 (TVariable v)
 
 -- Unification
-mgu :: MonadFail m => Type -> Type -> m Subst
+mgu :: Type -> Type -> Result Subst
 mgu type1 type2 =
     case (type1, type2) of
         (TApply lhs1 rhs1, TApply lhs2 rhs2) -> do
@@ -176,17 +188,20 @@ mgu type1 type2 =
             return nullSubst
 
         _ ->
-            fail $ "type1 and type2 cannot be unified: type1="
-                ++ show type1 ++ ", type2=" ++ show type2
+            typeError
+                $ "type1 and type2 cannot be unified: type1="
+                <> T.pack (show type1)
+                <> ", type2="
+                <> T.pack (show type2)
 
-bindVariable :: MonadFail m => Variable -> Type -> m Subst
+bindVariable :: Variable -> Type -> Result Subst
 bindVariable u t
     | t == TVariable u               = return nullSubst
-    | u `Set.member` typeVariables t = fail "occurs check fails"
-    | kind u /= kind t               = fail "kinds do not match"
+    | u `Set.member` typeVariables t = typeError "occurs check fails"
+    | kind u /= kind t               = typeError "kinds do not match"
     | otherwise                      = return (u +-> t)
 
-match :: MonadFail m => Type -> Type -> m Subst
+match :: Type -> Type -> Result Subst
 match type1 type2 =
     case (type1, type2) of
         (TApply lhs1 rhs1, TApply lhs2 rhs2) -> do
@@ -201,8 +216,11 @@ match type1 type2 =
             return nullSubst
 
         _ ->
-            fail $ "type1 and type2 do not match: type1="
-                ++ show type1 ++ ", type2=" ++ show type2
+            typeError
+                $ "type1 and type2 do not match: type1="
+                <> T.pack (show type1)
+                <> ", type2="
+                <> T.pack (show type2)
 
 -- 型クラス
 data Qualified t = [Predicate] :=> t
@@ -226,16 +244,16 @@ instance Types Predicate where
     typeVariables (IsIn _ type_) =
         typeVariables type_
 
-mguPred :: Predicate -> Predicate -> Maybe Subst
+mguPred :: Predicate -> Predicate -> Result Subst
 mguPred = lift mgu
 
-matchPred :: Predicate -> Predicate -> Maybe Subst
+matchPred :: Predicate -> Predicate -> Result Subst
 matchPred = lift match
 
-lift :: MonadFail m => (Type -> Type -> m a) -> Predicate -> Predicate -> m a
+lift :: (Type -> Type -> Result a) -> Predicate -> Predicate -> Result a
 lift f (IsIn ident1 type1) (IsIn ident2 type2)
     | ident1 == ident2 = f type1 type2
-    | otherwise        = fail "classes differ"
+    | otherwise        = typeError "classes differ"
 
 type Instance = Qualified Predicate
 

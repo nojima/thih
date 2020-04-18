@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 0a3ca13f93a1d1f9e1bd51863aaeab8f54732db084b8954035569358e6503714
+-- hash: 96db0164db684a577d39dec95c594b20a6390da6b354dcaf2d14194180de657c
 
 name:           thih
 version:        0.1.0.0
@@ -35,6 +35,7 @@ library
   build-depends:
       base >=4.7 && <5
     , containers
+    , mtl
     , text
   default-language: Haskell2010
 
@@ -48,6 +49,7 @@ executable thih-exe
   build-depends:
       base >=4.7 && <5
     , containers
+    , mtl
     , text
     , thih
   default-language: Haskell2010
@@ -63,6 +65,7 @@ test-suite thih-test
   build-depends:
       base >=4.7 && <5
     , containers
+    , mtl
     , text
     , thih
   default-language: Haskell2010
