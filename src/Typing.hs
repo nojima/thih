@@ -146,12 +146,60 @@ s1 @@ s2 =
 merge :: MonadFail m => Subst -> Subst -> m Subst
 merge s1 s2 =
     if all mapsToSameType intersection then
-        return $ Map.union s1 s2
+        return (Map.union s1 s2)
     else
         fail $ "cannot merge s1 and s2: s1="
             ++ show s1 ++ ", s2=" ++ show s2
   where
     intersection =
-        Map.keys $ Map.intersection s1 s2
+        Map.keys (Map.intersection s1 s2)
     mapsToSameType v =
         apply s1 (TVariable v) == apply s2 (TVariable v)
+
+-- Unification
+
+mgu :: MonadFail m => Type -> Type -> m Subst
+mgu type1 type2 =
+    case (type1, type2) of
+        (TApply lhs1 rhs1, TApply lhs2 rhs2) -> do
+            subst1 <- mgu lhs1 lhs2
+            subst2 <- mgu (apply subst1 rhs1) (apply subst1 rhs2)
+            return (subst2 @@ subst1)
+
+        (TVariable u, t) ->
+            bindVariable u t
+
+        (t, TVariable u) ->
+            bindVariable u t
+
+        (TConstant tc1, TConstant tc2) | tc1 == tc2 ->
+            return nullSubst
+
+        _ ->
+            fail $ "type1 and type2 cannot be unified: type1="
+                ++ show type1 ++ ", type2=" ++ show type2
+
+bindVariable :: MonadFail m => Variable -> Type -> m Subst
+bindVariable u t
+    | t == TVariable u               = return nullSubst
+    | u `Set.member` typeVariables t = fail "occurs check fails"
+    | kind u /= kind t               = fail "kinds do not match"
+    | otherwise                      = return (u +-> t)
+
+match :: MonadFail m => Type -> Type -> m Subst
+match type1 type2 =
+    case (type1, type2) of
+        (TApply lhs1 rhs1, TApply lhs2 rhs2) -> do
+            subst1 <- match lhs1 lhs2
+            subst2 <- match rhs1 rhs2
+            merge subst1 subst2
+
+        (TVariable u, t) | kind u == kind t ->
+            return (u +-> t)
+
+        (TConstant tc1, TConstant tc2) | tc1 == tc2 ->
+            return nullSubst
+
+        _ ->
+            fail $ "type1 and type2 do not match: type1="
+                ++ show type1 ++ ", type2=" ++ show type2
