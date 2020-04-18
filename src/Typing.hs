@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE NamedFieldPuns #-}
 module Typing where
 
 import           Control.Monad (msum)
@@ -157,7 +158,6 @@ merge s1 s2 =
         apply s1 (TVariable v) == apply s2 (TVariable v)
 
 -- Unification
-
 mgu :: MonadFail m => Type -> Type -> m Subst
 mgu type1 type2 =
     case (type1, type2) of
@@ -203,3 +203,77 @@ match type1 type2 =
         _ ->
             fail $ "type1 and type2 do not match: type1="
                 ++ show type1 ++ ", type2=" ++ show type2
+
+-- 型クラス
+data Qualified t = [Predicate] :=> t
+    deriving (Show, Eq)
+
+data Predicate =
+    IsIn Id Type
+    deriving (Show, Eq)
+
+instance Types t => Types (Qualified t) where
+    apply subst (predicates :=> type_) =
+        apply subst predicates :=> apply subst type_
+
+    typeVariables (predicates :=> type_) =
+        typeVariables predicates `Set.union` typeVariables type_
+
+instance Types Predicate where
+    apply subst (IsIn ident type_) =
+        IsIn ident (apply subst type_)
+
+    typeVariables (IsIn _ type_) =
+        typeVariables type_
+
+mguPred :: Predicate -> Predicate -> Maybe Subst
+mguPred = lift mgu
+
+matchPred :: Predicate -> Predicate -> Maybe Subst
+matchPred = lift match
+
+lift :: MonadFail m => (Type -> Type -> m a) -> Predicate -> Predicate -> m a
+lift f (IsIn ident1 type1) (IsIn ident2 type2)
+    | ident1 == ident2 = f type1 type2
+    | otherwise        = fail "classes differ"
+
+type Instance = Qualified Predicate
+
+data Class = Class
+    { _superClasses :: [Id]       -- name of each superclass
+    , _instances    :: [Instance] -- an entry for each instance declaration
+    }
+    deriving (Show, Eq)
+
+-- クラス環境
+data ClassEnv = ClassEnv
+    { _classes  :: Map Id Class
+    , _defaults :: [Type]
+    }
+
+super :: ClassEnv -> Id -> [Id]
+super classEnv ident =
+    case Map.lookup ident (_classes classEnv) of
+        Just Class{_superClasses} ->
+            _superClasses
+        _ ->
+            error $ T.unpack $ "`" <> ident <> "` is not a class"
+
+instances :: ClassEnv -> Id -> [Instance]
+instances classEnv ident =
+    case Map.lookup ident (_classes classEnv) of
+        Just Class{_instances} ->
+            _instances
+        _ ->
+            error $ T.unpack $ "`" <> ident <> "` is not a class"
+
+modify :: ClassEnv -> Id -> Class -> ClassEnv
+modify classEnv ident class_ =
+    classEnv{_classes = Map.insert ident class_ (_classes classEnv)}
+
+initialClassEnv :: ClassEnv
+initialClassEnv =
+    ClassEnv
+        { _classes  = Map.empty
+        , _defaults = [tInteger, tDouble]
+        }
